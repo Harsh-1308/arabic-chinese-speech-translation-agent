@@ -159,7 +159,7 @@
         $("models").textContent = `${r.agent} · speech-to-text ${r.asr_model} · translation ${r.mt_model}`;
       } else if (r.error) {
         setStatus("Not available"); showError("The agent failed to load: " + r.error);
-      } else { setStatus('<span class="spinner"></span>Starting…'); setTimeout(health, 2000); }
+      } else { setStatus('<span class="spinner"></span>Loading and warming up models (about 1–2 min on first start)…'); setTimeout(health, 2000); }
     } catch { setStatus("Server not reachable"); setTimeout(health, 3000); }
     updateButton();
   }

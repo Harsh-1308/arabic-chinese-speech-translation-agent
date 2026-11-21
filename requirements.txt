@@ -1,6 +1,7 @@
 agent-framework-core
 agent-framework-openai   # MAF's OpenAI-compatible client, pointed at local Ollama
 python-dotenv
+httpx                    # keep-alive pings to Ollama's native API
 faster-whisper
 sounddevice
 soundfile

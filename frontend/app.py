@@ -5,6 +5,9 @@
 One agent and one conversation session (short-term memory) are shared by the page; requests are
 processed one at a time so turns don't interleave in the session. "Clear memory" starts a new session.
 
+Start-up runs in the background (the page loads immediately and shows "Starting..."): load Whisper,
+create the agent, warm up the LLM, then keep it loaded in Ollama so no request pays a cold start.
+
 Privacy: uploaded audio is written to a temporary folder and deleted when the request ends; input and
 output text are not logged or stored.
 """
@@ -13,7 +16,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import re
 import sys
 import tempfile
 import time
@@ -29,8 +31,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
+import agent as translator  # noqa: E402
 import config  # noqa: E402
-from agent import SCRIPT_RE, audio_message, detect_text_language, text_message  # noqa: E402
+from agent import SCRIPT_RE, detect_text_language  # noqa: E402
 
 log = logging.getLogger("frontend")
 STATIC = Path(__file__).resolve().parent / "static"
@@ -38,54 +41,33 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_TEXT_CHARS = config.MAX_TEXT_CHARS
 MAX_UPLOAD_MB = config.MAX_AUDIO_BYTES // (1024 * 1024)
 
-_FIELD_RE = re.compile(
-    r"Detected language:\s*(?P<lang>.+?)\s*\n\s*Original:\s*(?P<orig>.*?)\s*\n\s*English:\s*(?P<en>.*)",
-    re.S | re.I,
-)
-
 Lang = Literal["auto", "ar", "zh"]
 
 
-def parse_reply(reply: str) -> dict:
-    """Split the agent's fixed-format reply into fields. Raises ValueError for refusals/errors."""
-    reply = reply.strip()
-    if reply.lower().startswith(("unsupported language", "error:")):
-        raise ValueError(reply)
-    m = _FIELD_RE.search(reply)
-    if not m:  # model drifted from the format: show the raw reply rather than failing
-        return {"language": None, "original": "", "english": reply}
-    return {"language": m["lang"].strip(), "original": m["orig"].strip(), "english": m["en"].strip()}
-
-
 class Service:
-    """Owns the agent and the conversation session."""
+    """Owns the agent and the conversation session (the agent's short-term memory)."""
 
     def __init__(self) -> None:
-        from agent import create_agent
-
-        self.agent = create_agent()
+        self.agent = translator.create_agent()
         self.session = self.agent.create_session()
-        self.lock = asyncio.Lock()
+        self.lock = asyncio.Lock()  # one request at a time: turns must not interleave in the session
+
+    async def warm_up(self) -> None:
+        await translator.warm_up(self.agent)
 
     def reset(self) -> None:
         self.session = self.agent.create_session()
 
-    async def _ask(self, message: str) -> dict:
-        from agent import translate
-
-        async with self.lock:
-            reply = await translate(self.agent, self.session, message)
-        return parse_reply(reply)
-
     async def translate_text(self, text: str, lang: str) -> dict:
         t0 = time.perf_counter()
-        out = await self._ask(text_message(text, lang))
-        out["original"] = text  # the code already knows the source text exactly
+        async with self.lock:
+            out = await translator.translate_text(self.agent, self.session, text, lang)
         return {"mode": "text", **out, "elapsed_s": round(time.perf_counter() - t0, 1), "audio_s": None}
 
     async def translate_audio(self, src: Path, lang: str) -> dict:
         t0 = time.perf_counter()
-        out = await self._ask(audio_message(src, lang))
+        async with self.lock:
+            out = await translator.translate_audio(self.agent, self.session, src, lang)
         return {"mode": "audio", **out, "elapsed_s": round(time.perf_counter() - t0, 1),
                 "audio_s": audio_duration(src)}
 
@@ -109,19 +91,32 @@ def create_app(service_factory=None) -> FastAPI:
     """service_factory() -> Service; tests can pass a fake so no API calls are made."""
     state: dict[str, Any] = {"service": None, "error": None}
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def start_up() -> None:
+        """Load models and warm up; the service is published only when it's fast to use."""
         try:
             if service_factory is None:
                 from audio import load_whisper
 
                 await asyncio.to_thread(load_whisper)  # first run downloads the Whisper model
-            state["service"] = (service_factory or Service)()
+            svc = (service_factory or Service)()
+            if service_factory is None:
+                t0 = time.perf_counter()
+                await svc.warm_up()  # load the LLM + fill Ollama's prompt cache
+                print(f"LLM warmed up in {time.perf_counter() - t0:.0f}s", flush=True)
+            state["service"] = svc
         except Exception as e:  # keep serving so the page can show the problem
             log.exception("Agent failed to load")
             state["error"] = f"{type(e).__name__}: {e}"
-        print("Frontend ready: http://127.0.0.1:8000", flush=True)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        tasks = [asyncio.create_task(start_up())]
+        if service_factory is None:
+            tasks.append(asyncio.create_task(translator.keep_model_loaded()))
+        print("Frontend ready: http://127.0.0.1:8000 (models are loading in the background)", flush=True)
         yield
+        for t in tasks:
+            t.cancel()
 
     app = FastAPI(title="Arabic & Chinese to English Translator", lifespan=lifespan, docs_url=None, redoc_url=None)
 

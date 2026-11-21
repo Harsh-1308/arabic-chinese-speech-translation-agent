@@ -9,6 +9,7 @@ load_dotenv()
 # Translation / agent LLM: local Ollama via its OpenAI-compatible endpoint (no API key needed)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
 CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b")
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "512"))  # upper bound for one translation
 
 # Speech-to-text: local faster-whisper
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")  # tiny | base | small | medium | large-v3

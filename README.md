@@ -33,8 +33,17 @@ python main.py
 
 ## Models and speed (CPU)
 - `WHISPER_MODEL=small` is the default; `medium` is noticeably better for Arabic but slower.
-- `OLLAMA_CHAT_MODEL=qwen2.5:7b` is the default; `qwen2.5:3b` is about 2x faster with lower quality.
-- The first translation after start-up is slow (the model loads into memory); later ones are faster.
+- `OLLAMA_CHAT_MODEL=qwen2.5:7b` is the default; `qwen2.5:3b` is ~1.5x faster here, with lower quality.
+- Start-up takes ~1-2 min (Whisper load + LLM warm-up); after that a short sentence takes ~8-15 s
+  on a 4-core laptop CPU (was 160 s+ before the optimisations below).
+
+### Speed optimisations (measured with Ollama's timings)
+| Problem | Fix |
+|---|---|
+| Ollama unloads the model after 5 idle minutes; reload + re-reading the prompt took ~80 s | Warm-up request at start-up and a background keep-alive ping every 4 min |
+| Generation is the slowest step (~2 tokens/s) and the model echoed the original text | Model replies with the English only; language and original come from code / the tool |
+| A changed prompt prefix forces Ollama to re-read the whole prompt | Instructions and tool list are identical on every call; history is appended, never trimmed |
+| Runaway generations | `max_tokens` cap (`MAX_OUTPUT_TOKENS`) and temperature 0 |
 
 ## Design
 - **Agent** (`agent.py`): role, task, context, examples and guardrails are in the instructions;
