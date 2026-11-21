@@ -1,0 +1,10 @@
+agent-framework-core
+agent-framework-openai   # MAF's OpenAI-compatible client, pointed at local Ollama
+python-dotenv
+faster-whisper
+sounddevice
+soundfile
+numpy
+fastapi
+uvicorn
+python-multipart

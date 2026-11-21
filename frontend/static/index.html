@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arabic & Chinese Translator</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f7fbff; --card: #ffffff; --text: #2b3445; --muted: #7a8699; --border: #e4ecf5;
+    --accent: #4f8ef7; --accent-text: #ffffff; --soft: #eaf3ff; --input: #fbfdff;
+    --red: #f06a6a; --error-bg: #fff3f3;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--text);
+         background: linear-gradient(180deg, #eef6ff 0%, #f7fbff 40%, #fdfcf7 100%) fixed;
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "Noto Naskh Arabic", "Tahoma", sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 16px 48px; }
+  header h1 { margin: 0 0 4px; font-size: 24px; }
+  header p { margin: 0 0 22px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 18px;
+          box-shadow: 0 4px 18px rgba(79, 142, 247, 0.08); }
+  .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .tabs { display: flex; gap: 6px; }
+  .tab { border: 1px solid var(--border); background: transparent; color: var(--text); padding: 7px 16px;
+         border-radius: 999px; cursor: pointer; font: inherit; }
+  .tab.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .lang { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+  select { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+  select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--soft); }
+  textarea { width: 100%; min-height: 120px; resize: vertical; padding: 12px; border-radius: 8px;
+             border: 1px solid var(--border); background: var(--input); color: var(--text); font: inherit; font-size: 16px; }
+  textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--soft); }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 26px 16px; text-align: center; color: var(--muted);
+          background: var(--input); transition: border-color .15s, background .15s; }
+  .drop.over { border-color: var(--accent); background: var(--soft); }
+  .drop strong { color: var(--text); }
+  .link { color: var(--accent); text-decoration: underline; cursor: pointer; background: none; border: 0; font: inherit; padding: 0; }
+  .or { margin: 10px 0; font-size: 13px; }
+  .picked { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; color: var(--text); }
+  .picked audio { max-width: 100%; height: 36px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+  .btn { border: 0; background: var(--accent); color: var(--accent-text); padding: 10px 22px; border-radius: 8px;
+         font: inherit; font-weight: 600; cursor: pointer; box-shadow: 0 2px 8px rgba(79, 142, 247, 0.25); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); font-weight: 500; box-shadow: none; }
+  .btn.ghost.rec { border-color: var(--red); color: var(--red); }
+  .btn.small { padding: 5px 12px; font-size: 13px; }
+  .spacer { flex: 1; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .hidden { display: none !important; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--soft); border-top-color: var(--accent);
+             border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error { background: var(--error-bg); border: 1px solid #f7caca; color: #a33a3a; border-radius: 8px; padding: 10px 12px; margin-top: 12px; white-space: pre-wrap; }
+  h2 { font-size: 16px; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 12px; font-weight: 500; color: var(--accent); background: var(--soft); border-radius: 999px; padding: 2px 10px; }
+  .english { font-size: 18px; line-height: 1.6; margin: 0 0 6px; color: #1f2a3c; white-space: pre-wrap; }
+  .original { font-size: 16px; line-height: 1.7; margin: 8px 0 0; color: var(--muted); white-space: pre-wrap; unicode-bidi: plaintext; }
+  .meta { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .actions { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Arabic &amp; Chinese → English Translator</h1>
+    <p>Type Arabic or Chinese text, upload an audio clip, or record from your microphone.</p>
+  </header>
+
+  <section class="card">
+    <div class="toolbar">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="text" role="tab">Text</button>
+        <button class="tab" data-tab="audio" role="tab">Audio</button>
+      </div>
+      <label class="lang">Source language
+        <select id="lang">
+          <option value="auto">Auto-detect</option>
+          <option value="ar">Arabic · العربية</option>
+          <option value="zh">Chinese · 中文</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="pane-text">
+      <textarea id="src" dir="auto" placeholder="اكتب النص العربي هنا…  /  在这里输入中文……" maxlength="5000"></textarea>
+      <div class="hint" id="count">0 / 5000</div>
+    </div>
+
+    <div id="pane-audio" class="hidden">
+      <div class="drop" id="drop">
+        <strong>Drop an audio file here</strong> or <button class="link" id="browse">browse</button><br>
+        <span class="hint" id="audio-hint">wav, mp3, m4a, ogg, flac, webm · up to 25 MB</span>
+        <div class="or">or</div>
+        <button class="btn ghost" id="rec">● Record from microphone</button>
+        <input type="file" id="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm,.mp4,.mpeg,.mpga" hidden>
+        <div class="picked hidden" id="picked">
+          <span id="picked-name"></span>
+          <audio id="player" controls></audio>
+          <button class="link" id="clear">remove</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="go">Translate</button>
+      <span class="hint" id="status">Connecting…</span>
+      <span class="spacer"></span>
+      <button class="btn ghost small" id="reset" title="Start a new conversation; the agent forgets earlier names and terms">Clear memory</button>
+    </div>
+    <div class="error hidden" id="error"></div>
+  </section>
+
+  <section class="card hidden" id="result">
+    <h2>English translation <span class="badge" id="detected"></span></h2>
+    <p class="english" id="english"></p>
+    <p class="meta" id="meta"></p>
+    <div class="actions">
+      <button class="btn ghost small" id="copy">Copy English</button>
+      <button class="btn ghost small" id="dl-txt">Download .txt</button>
+    </div>
+    <details id="details">
+      <summary>Show original text</summary>
+      <p class="original" id="original" dir="auto"></p>
+    </details>
+  </section>
+
+  <footer id="models"></footer>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const MAX_REC_S = 60;
+  let mode = "text", audioBlob = null, audioName = "", recorder = null, chunks = [], last = null, ready = false, busy = false;
+  let maxChars = 5000;
+
+  const fmt = s => { const m = Math.floor(s / 60), x = (s - m * 60).toFixed(1).padStart(4, "0"); return `${m}:${x}`; };
+
+  function setStatus(html) { $("status").innerHTML = html; }
+  function showError(msg) { $("error").textContent = msg; $("error").classList.toggle("hidden", !msg); }
+  function updateButton() {
+    const hasInput = mode === "text" ? $("src").value.trim().length > 0 : !!audioBlob;
+    $("go").disabled = !ready || busy || !hasInput || !!recorder;
+    $("reset").disabled = !ready || busy;
+  }
+
+  // ---------------------------------------------------------------- health
+  async function health() {
+    try {
+      const r = await (await fetch("/api/health")).json();
+      if (r.ready) {
+        ready = true; setStatus("Ready");
+        maxChars = r.max_text_chars; $("src").maxLength = maxChars; $("count").textContent = `${$("src").value.length} / ${maxChars}`;
+        $("audio-hint").textContent = `wav, mp3, m4a, ogg, flac, webm · up to ${r.max_upload_mb} MB`;
+        $("models").textContent = `${r.agent} · speech-to-text ${r.asr_model} · translation ${r.mt_model}`;
+      } else if (r.error) {
+        setStatus("Not available"); showError("The agent failed to load: " + r.error);
+      } else { setStatus('<span class="spinner"></span>Starting…'); setTimeout(health, 2000); }
+    } catch { setStatus("Server not reachable"); setTimeout(health, 3000); }
+    updateButton();
+  }
+
+  // ---------------------------------------------------------------- tabs / language
+  document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b));
+    mode = b.dataset.tab;
+    $("pane-text").classList.toggle("hidden", mode !== "text");
+    $("pane-audio").classList.toggle("hidden", mode !== "audio");
+    showError(""); updateButton();
+  });
+  const placeholders = { auto: "اكتب النص العربي هنا…  /  在这里输入中文……", ar: "اكتب النص العربي هنا…", zh: "在这里输入中文……" };
+  $("lang").onchange = () => { $("src").placeholder = placeholders[$("lang").value]; showError(""); };
+  $("src").addEventListener("input", () => { $("count").textContent = `${$("src").value.length} / ${maxChars}`; updateButton(); });
+  $("src").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !$("go").disabled) go(); });
+
+  // ---------------------------------------------------------------- audio pick / drop / record
+  function setAudio(blob, name) {
+    audioBlob = blob; audioName = name;
+    const p = $("player"); if (p.src) URL.revokeObjectURL(p.src);
+    $("picked").classList.toggle("hidden", !blob);
+    if (blob) { p.src = URL.createObjectURL(blob); $("picked-name").textContent = name; } else p.removeAttribute("src");
+    showError(""); updateButton();
+  }
+  $("browse").onclick = () => $("file").click();
+  $("file").onchange = e => { const f = e.target.files[0]; if (f) setAudio(f, f.name); e.target.value = ""; };
+  $("clear").onclick = () => setAudio(null, "");
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) setAudio(f, f.name); });
+
+  let timerId = null;
+  $("rec").onclick = async () => {
+    if (recorder) { recorder.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const type = (recorder.mimeType || "audio/webm").split(";")[0];
+        const ext = type.includes("ogg") ? "ogg" : type.includes("mp4") ? "m4a" : "webm";
+        recorder = null; clearInterval(timerId);
+        $("rec").textContent = "● Record from microphone"; $("rec").classList.remove("rec");
+        setAudio(new Blob(chunks, { type }), `recording.${ext}`);
+      };
+      recorder.start();
+      const t0 = Date.now();
+      timerId = setInterval(() => {
+        const s = (Date.now() - t0) / 1000;
+        $("rec").textContent = `■ Stop recording (${fmt(s)} / 1:00)`;
+        if (s >= MAX_REC_S && recorder) recorder.stop();
+      }, 250);
+      $("rec").textContent = "■ Stop recording (0:00.0 / 1:00)"; $("rec").classList.add("rec");
+      updateButton();
+    } catch (e) { showError("Microphone not available: " + e.message); }
+  };
+
+  // ---------------------------------------------------------------- translate
+  async function go() {
+    busy = true; updateButton(); showError("");
+    const t0 = Date.now();
+    const label = mode === "audio" ? "Transcribing and translating…" : "Translating…";
+    const tick = setInterval(() => setStatus(`<span class="spinner"></span>${label} ${Math.round((Date.now() - t0) / 1000)}s`), 500);
+    setStatus(`<span class="spinner"></span>${label}`);
+    const language = $("lang").value;
+    try {
+      let res;
+      if (mode === "text") {
+        res = await fetch("/api/translate/text", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                   body: JSON.stringify({ text: $("src").value, language }) });
+      } else {
+        const fd = new FormData(); fd.append("file", audioBlob, audioName); fd.append("language", language);
+        res = await fetch("/api/translate/audio", { method: "POST", body: fd });
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
+      render(data); setStatus("Done");
+    } catch (e) { showError(e.message); setStatus("Ready"); }
+    finally { clearInterval(tick); busy = false; updateButton(); }
+  }
+  $("go").onclick = go;
+
+  $("reset").onclick = async () => {
+    try {
+      const res = await fetch("/api/reset", { method: "POST" });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      setStatus("Memory cleared");
+    } catch (e) { showError(e.message); }
+  };
+
+  function render(d) {
+    last = d;
+    $("english").textContent = d.english || "(no speech or text found)";
+    $("detected").textContent = d.language || "";
+    $("detected").classList.toggle("hidden", !d.language);
+    $("original").textContent = d.original || "";
+    $("details").classList.toggle("hidden", !d.original);
+    $("details").open = d.mode === "audio";
+    const parts = [d.mode === "audio" ? "from audio" : "from text"];
+    if (d.audio_s != null) parts.push(`audio ${d.audio_s} s`);
+    parts.push(`processed in ${d.elapsed_s} s`);
+    $("meta").textContent = parts.join(" · ");
+    $("result").classList.remove("hidden");
+  }
+
+  // ---------------------------------------------------------------- copy / download
+  function download(name, text) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+    a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  $("copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(last.english); $("copy").textContent = "Copied"; }
+    catch { $("copy").textContent = "Copy failed"; }
+    setTimeout(() => $("copy").textContent = "Copy English", 1500);
+  };
+  $("dl-txt").onclick = () => download("translation.txt",
+    `${last.language ? `Detected language: ${last.language}\n` : ""}Original:\n${last.original}\n\nEnglish:\n${last.english}\n`);
+
+  health();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets / local settings
+.env
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Audio test files and recordings
+*.wav
+*.mp3
+*.m4a
+*.webm
+*.ogg
