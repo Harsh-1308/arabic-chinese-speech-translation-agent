@@ -8,14 +8,19 @@ processed one at a time so turns don't interleave in the session. "Clear memory"
 Start-up runs in the background (the page loads immediately and shows "Starting..."): load Whisper,
 create the agent, warm up the LLM, then keep it loaded in Ollama so no request pays a cold start.
 
-Privacy: uploaded audio is written to a temporary folder and deleted when the request ends; input and
+Documents (PDF / DOCX / images) are streamed back as NDJSON: one JSON line per event (status,
+extracted, chunk, done, error), so the page can show progress while each chunk is translated.
+
+Privacy: uploaded files are written to a temporary folder and deleted when the request ends; input and
 output text are not logged or stored.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import shutil
 import sys
 import tempfile
 import time
@@ -27,12 +32,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
-from fastapi.responses import FileResponse  # noqa: E402
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
+from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import agent as translator  # noqa: E402
 import config  # noqa: E402
+import documents  # noqa: E402
 from agent import SCRIPT_RE, detect_text_language  # noqa: E402
 
 log = logging.getLogger("frontend")
@@ -40,6 +46,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 
 MAX_TEXT_CHARS = config.MAX_TEXT_CHARS
 MAX_UPLOAD_MB = config.MAX_AUDIO_BYTES // (1024 * 1024)
+MAX_DOC_MB = config.MAX_DOC_BYTES // (1024 * 1024)
 
 Lang = Literal["auto", "ar", "zh"]
 
@@ -71,6 +78,42 @@ class Service:
         return {"mode": "audio", **out, "elapsed_s": round(time.perf_counter() - t0, 1),
                 "audio_s": audio_duration(src)}
 
+    async def translate_document(self, doc: documents.ExtractedDocument):
+        """Yield chunk results. The lock is held per chunk, so a quick chat request can slip in
+        between chunks instead of waiting for the whole document."""
+        results = translator.translate_document(self.agent, doc)
+        while True:
+            async with self.lock:
+                try:
+                    item = await anext(results)
+                except StopAsyncIteration:
+                    return
+            yield item
+
+
+async def save_upload(file: UploadFile, allowed: set[str], limit: int) -> Path:
+    """Stream an upload to a new temp folder, enforcing type and size. Caller deletes the folder."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in allowed:
+        names = ", ".join(sorted(e.lstrip(".") for e in allowed))
+        raise HTTPException(400, f"Unsupported file type. Use one of: {names}.")
+    tmp = Path(tempfile.mkdtemp(prefix="st_web_"))
+    dst = tmp / f"upload{suffix}"
+    size = 0
+    try:
+        with dst.open("wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"File is larger than {limit // (1024 * 1024)} MB.")
+                f.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "The uploaded file is empty.")
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    return dst
+
 
 def audio_duration(path: Path) -> float | None:
     try:
@@ -98,6 +141,7 @@ def create_app(service_factory=None) -> FastAPI:
                 from audio import load_whisper
 
                 await asyncio.to_thread(load_whisper)  # first run downloads the Whisper model
+                await asyncio.to_thread(documents.preload_ocr)  # OCR models (a few MB each)
             svc = (service_factory or Service)()
             if service_factory is None:
                 t0 = time.perf_counter()
@@ -148,7 +192,9 @@ def create_app(service_factory=None) -> FastAPI:
         return {"ready": state["service"] is not None, "error": state["error"],
                 "agent": "SpeechTranslator (Microsoft Agent Framework)",
                 "asr_model": f"faster-whisper {config.WHISPER_MODEL}", "mt_model": f"{config.CHAT_MODEL} (Ollama)",
-                "max_text_chars": MAX_TEXT_CHARS, "max_upload_mb": MAX_UPLOAD_MB}
+                "ocr_model": "RapidOCR (PP-OCR Chinese + Arabic)",
+                "max_text_chars": MAX_TEXT_CHARS, "max_upload_mb": MAX_UPLOAD_MB,
+                "max_doc_mb": MAX_DOC_MB, "max_doc_pages": config.MAX_DOC_PAGES}
 
     @app.post("/api/reset")
     def reset():
@@ -176,22 +222,48 @@ def create_app(service_factory=None) -> FastAPI:
     @app.post("/api/translate/audio")
     async def translate_audio(file: UploadFile = File(...), language: Lang = Form("auto")):
         svc = service()
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in config.ALLOWED_AUDIO_EXTENSIONS:
-            allowed = ", ".join(sorted(e.lstrip(".") for e in config.ALLOWED_AUDIO_EXTENSIONS))
-            raise HTTPException(400, f"Unsupported audio format. Use one of: {allowed}.")
-        with tempfile.TemporaryDirectory(prefix="st_web_") as tmp:
-            src = Path(tmp) / f"upload{suffix}"
-            size, limit = 0, config.MAX_AUDIO_BYTES
-            with src.open("wb") as f:
-                while chunk := await file.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > limit:
-                        raise HTTPException(413, f"File is larger than {MAX_UPLOAD_MB} MB.")
-                    f.write(chunk)
-            if size == 0:
-                raise HTTPException(400, "The uploaded file is empty.")
+        src = await save_upload(file, config.ALLOWED_AUDIO_EXTENSIONS, config.MAX_AUDIO_BYTES)
+        try:
             return await guarded(svc.translate_audio(src, language))
+        finally:
+            shutil.rmtree(src.parent, ignore_errors=True)
+
+    @app.post("/api/translate/document")
+    async def translate_document(request: Request, file: UploadFile = File(...), language: Lang = Form("auto")):
+        svc = service()
+        src = await save_upload(file, documents.ALLOWED_DOC_EXTENSIONS, config.MAX_DOC_BYTES)
+        hint = language if language in config.SUPPORTED_LANGUAGES else None
+
+        async def events():
+            """NDJSON stream: status -> extracted -> chunk... -> done (or error)."""
+            t0 = time.perf_counter()
+            line = lambda obj: json.dumps(obj, ensure_ascii=False) + "\n"  # noqa: E731
+            try:
+                yield line({"type": "status", "message": "Extracting text…"})
+                try:  # OCR is CPU-heavy: run it off the event loop
+                    doc = await asyncio.to_thread(documents.extract_document, src, hint)
+                finally:
+                    shutil.rmtree(src.parent, ignore_errors=True)  # file no longer needed
+                todo = sum(1 for c in doc.chunks if c.lang)
+                yield line({"type": "extracted", "kind": doc.kind, "pages": doc.pages,
+                            "ocr_pages": doc.ocr_pages, "chunks": len(doc.chunks), "to_translate": todo})
+                async for item in svc.translate_document(doc):
+                    if await request.is_disconnected():  # user left/cancelled: stop using the CPU
+                        return
+                    yield line({"type": "chunk", **item})
+                yield line({"type": "done", "elapsed_s": round(time.perf_counter() - t0, 1)})
+            except documents.DocumentError as e:
+                yield line({"type": "error", "detail": str(e)})
+            except Exception as e:
+                log.exception("Document translation failed")
+                msg = str(e)
+                if "connect" in msg.lower():
+                    msg = f"Cannot reach Ollama at {config.OLLAMA_BASE_URL}. Is Ollama running?"
+                yield line({"type": "error", "detail": f"Translation failed: {msg}"})
+            finally:
+                shutil.rmtree(src.parent, ignore_errors=True)
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
 
     return app
 

@@ -2,6 +2,7 @@
 
 Commands:
   /file <path>   translate an audio file
+  /doc <path>    translate a document (PDF, DOCX or image)
   /mic           record from microphone and translate
   /reset         clear conversation memory
   /quit          exit
@@ -13,6 +14,7 @@ import time
 
 import config
 import agent as translator
+import documents
 from audio import AudioInputError, record_from_mic, validate_audio_file
 
 HELP = __doc__.split("Commands:")[1]
@@ -54,6 +56,17 @@ async def main() -> None:
                 path = await asyncio.to_thread(record_from_mic)
                 print("Translating...")
                 show(await translator.translate_audio(agent, session, path), t0)
+            elif line.startswith("/doc"):
+                print("Extracting text...")
+                doc = await asyncio.to_thread(documents.extract_document, line[len("/doc"):])
+                print(f"{doc.kind.upper()}, {doc.pages} page(s), {doc.ocr_pages} read with OCR, "
+                      f"{len(doc.chunks)} part(s). Translating...")
+                async for r in translator.translate_document(agent, doc):
+                    flag = " [check OCR]" if r["check"] else " [kept as-is]" if r.get("skipped") else ""
+                    english = r["english"] or f"({r.get('error')})"
+                    print(f"\n--- part {r['index'] + 1}/{r['total']} ({r['where']}){flag}\n"
+                          f"{r['original']}\n=> {english}")
+                print(f"\n({time.perf_counter() - t0:.1f}s)")
             elif line.startswith("/file"):
                 path = validate_audio_file(line[len("/file"):])
                 print("Translating...")

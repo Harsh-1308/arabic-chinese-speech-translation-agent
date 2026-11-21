@@ -60,6 +60,18 @@
   .meta { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
   .actions { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
   details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  /* document results */
+  .progress { height: 8px; background: var(--soft); border-radius: 999px; overflow: hidden; margin: 6px 0 12px; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .doc-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; border-top: 1px solid var(--border); padding: 10px 0; }
+  .doc-row .src { color: var(--muted); white-space: pre-wrap; unicode-bidi: plaintext; }
+  .doc-row .en { white-space: pre-wrap; }
+  .doc-row .where { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+  .tag { display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 8px; margin-left: 6px; }
+  .tag.check { background: #fff4dc; color: #8a5a00; }
+  .tag.skip { background: var(--soft); color: var(--muted); }
+  .tag.err { background: var(--error-bg); color: #a33a3a; }
+  @media (max-width: 560px) { .doc-row { grid-template-columns: 1fr; } }
   footer { text-align: center; color: var(--muted); font-size: 12px; }
 </style>
 </head>
@@ -67,7 +79,7 @@
 <div class="wrap">
   <header>
     <h1>Arabic &amp; Chinese → English Translator</h1>
-    <p>Type Arabic or Chinese text, upload an audio clip, or record from your microphone.</p>
+    <p>Type Arabic or Chinese text, upload an audio clip or a document (PDF, Word, image), or record from your microphone.</p>
   </header>
 
   <section class="card">
@@ -75,6 +87,7 @@
       <div class="tabs" role="tablist">
         <button class="tab active" data-tab="text" role="tab">Text</button>
         <button class="tab" data-tab="audio" role="tab">Audio</button>
+        <button class="tab" data-tab="doc" role="tab">Document</button>
       </div>
       <label class="lang">Source language
         <select id="lang">
@@ -105,6 +118,19 @@
       </div>
     </div>
 
+    <div id="pane-doc" class="hidden">
+      <div class="drop" id="doc-drop">
+        <strong>Drop a document here</strong> or <button class="link" id="doc-browse">browse</button><br>
+        <span class="hint" id="doc-hint">PDF, Word (.docx), or image (png, jpg, webp…) · up to 10 MB / 10 pages</span>
+        <input type="file" id="doc-file" accept=".pdf,.docx,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" hidden>
+        <div class="picked hidden" id="doc-picked">
+          <span id="doc-name"></span>
+          <button class="link" id="doc-clear">remove</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:8px">Scanned pages and images are read with OCR. Long documents are translated paragraph by paragraph; results appear as they are ready.</div>
+    </div>
+
     <div class="row">
       <button class="btn" id="go">Translate</button>
       <span class="hint" id="status">Connecting…</span>
@@ -128,6 +154,18 @@
     </details>
   </section>
 
+  <section class="card hidden" id="doc-result">
+    <h2>Document translation <span class="badge" id="doc-summary"></span></h2>
+    <div class="progress"><div id="doc-bar"></div></div>
+    <p class="meta" id="doc-meta"></p>
+    <div class="actions">
+      <button class="btn ghost small" id="doc-copy">Copy English</button>
+      <button class="btn ghost small" id="doc-dl">Download .txt</button>
+      <button class="btn ghost small hidden" id="doc-stop">Stop</button>
+    </div>
+    <div id="doc-rows"></div>
+  </section>
+
   <footer id="models"></footer>
 </div>
 
@@ -142,8 +180,9 @@
 
   function setStatus(html) { $("status").innerHTML = html; }
   function showError(msg) { $("error").textContent = msg; $("error").classList.toggle("hidden", !msg); }
+  let docFile = null, docAbort = null, docResults = [];
   function updateButton() {
-    const hasInput = mode === "text" ? $("src").value.trim().length > 0 : !!audioBlob;
+    const hasInput = mode === "text" ? $("src").value.trim().length > 0 : mode === "audio" ? !!audioBlob : !!docFile;
     $("go").disabled = !ready || busy || !hasInput || !!recorder;
     $("reset").disabled = !ready || busy;
   }
@@ -156,7 +195,8 @@
         ready = true; setStatus("Ready");
         maxChars = r.max_text_chars; $("src").maxLength = maxChars; $("count").textContent = `${$("src").value.length} / ${maxChars}`;
         $("audio-hint").textContent = `wav, mp3, m4a, ogg, flac, webm · up to ${r.max_upload_mb} MB`;
-        $("models").textContent = `${r.agent} · speech-to-text ${r.asr_model} · translation ${r.mt_model}`;
+        $("doc-hint").textContent = `PDF, Word (.docx), or image (png, jpg, webp…) · up to ${r.max_doc_mb} MB / ${r.max_doc_pages} pages`;
+        $("models").textContent = `${r.agent} · speech-to-text ${r.asr_model} · OCR ${r.ocr_model} · translation ${r.mt_model}`;
       } else if (r.error) {
         setStatus("Not available"); showError("The agent failed to load: " + r.error);
       } else { setStatus('<span class="spinner"></span>Loading and warming up models (about 1–2 min on first start)…'); setTimeout(health, 2000); }
@@ -170,8 +210,24 @@
     mode = b.dataset.tab;
     $("pane-text").classList.toggle("hidden", mode !== "text");
     $("pane-audio").classList.toggle("hidden", mode !== "audio");
+    $("pane-doc").classList.toggle("hidden", mode !== "doc");
     showError(""); updateButton();
   });
+
+  // ---------------------------------------------------------------- document pick / drop
+  function setDoc(f) {
+    docFile = f || null;
+    $("doc-picked").classList.toggle("hidden", !docFile);
+    $("doc-name").textContent = docFile ? `${docFile.name} (${(docFile.size / 1024 / 1024).toFixed(1)} MB)` : "";
+    showError(""); updateButton();
+  }
+  $("doc-browse").onclick = () => $("doc-file").click();
+  $("doc-file").onchange = e => { setDoc(e.target.files[0]); e.target.value = ""; };
+  $("doc-clear").onclick = () => setDoc(null);
+  const docDrop = $("doc-drop");
+  ["dragenter", "dragover"].forEach(t => docDrop.addEventListener(t, e => { e.preventDefault(); docDrop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(t => docDrop.addEventListener(t, e => { e.preventDefault(); docDrop.classList.remove("over"); }));
+  docDrop.addEventListener("drop", e => setDoc(e.dataTransfer.files[0]));
   const placeholders = { auto: "اكتب النص العربي هنا…  /  在这里输入中文……", ar: "اكتب النص العربي هنا…", zh: "在这里输入中文……" };
   $("lang").onchange = () => { $("src").placeholder = placeholders[$("lang").value]; showError(""); };
   $("src").addEventListener("input", () => { $("count").textContent = `${$("src").value.length} / ${maxChars}`; updateButton(); });
@@ -223,6 +279,7 @@
 
   // ---------------------------------------------------------------- translate
   async function go() {
+    if (mode === "doc") return goDoc();
     busy = true; updateButton(); showError("");
     const t0 = Date.now();
     const label = mode === "audio" ? "Transcribing and translating…" : "Translating…";
@@ -246,6 +303,81 @@
   }
   $("go").onclick = go;
 
+  // ---------------------------------------------------------------- document translation (streamed)
+  // The server sends NDJSON: one JSON object per line (status, extracted, chunk, done, error).
+  async function goDoc() {
+    busy = true; updateButton(); showError("");
+    docResults = []; $("doc-rows").innerHTML = ""; $("doc-bar").style.width = "0";
+    $("doc-summary").textContent = ""; $("doc-meta").textContent = "";
+    $("doc-result").classList.remove("hidden"); $("result").classList.add("hidden");
+    $("doc-stop").classList.remove("hidden");
+    const t0 = Date.now();
+    let label = "Uploading…", done = 0, total = 0, todo = 0;
+    const tick = setInterval(() => setStatus(`<span class="spinner"></span>${label} ${Math.round((Date.now() - t0) / 1000)}s`), 500);
+    docAbort = new AbortController();
+    try {
+      const fd = new FormData(); fd.append("file", docFile, docFile.name); fd.append("language", $("lang").value);
+      const res = await fetch("/api/translate/document", { method: "POST", body: fd, signal: docAbort.signal });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
+      }
+      const reader = res.body.getReader(), decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done: end } = await reader.read();
+        if (end) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const ev = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);
+          if (ev.type === "status") label = ev.message;
+          else if (ev.type === "extracted") {
+            total = ev.chunks; todo = ev.to_translate;
+            const ocr = ev.ocr_pages ? ` · ${ev.ocr_pages} page${ev.ocr_pages > 1 ? "s" : ""} read with OCR` : "";
+            $("doc-meta").textContent = `${ev.kind.toUpperCase()} · ${ev.pages} page${ev.pages > 1 ? "s" : ""}${ocr} · ${todo} of ${total} parts to translate`;
+            label = `Translating part 1 of ${total}…`;
+          } else if (ev.type === "chunk") {
+            done = ev.index + 1; docResults.push(ev); addRow(ev);
+            $("doc-bar").style.width = `${(100 * done / total).toFixed(0)}%`;
+            label = done < total ? `Translating part ${done + 1} of ${total}…` : "Finishing…";
+          } else if (ev.type === "done") {
+            $("doc-summary").textContent = `done in ${ev.elapsed_s} s`;
+          } else if (ev.type === "error") throw new Error(ev.detail);
+        }
+      }
+      setStatus("Done");
+    } catch (e) {
+      if (e.name === "AbortError") { setStatus("Stopped"); $("doc-summary").textContent = `stopped after ${docResults.length} parts`; }
+      else { showError(e.message); setStatus("Ready"); }
+    } finally {
+      clearInterval(tick); busy = false; docAbort = null; updateButton();
+      $("doc-stop").classList.add("hidden");
+    }
+  }
+  $("doc-stop").onclick = () => docAbort && docAbort.abort();
+
+  function addRow(r) {
+    const row = document.createElement("div"); row.className = "doc-row";
+    const where = document.createElement("div"); where.className = "where";
+    where.textContent = `${r.where}${r.language ? " · " + r.language : ""}`;
+    const tag = (cls, text, title) => { const s = document.createElement("span"); s.className = "tag " + cls; s.textContent = text; if (title) s.title = title; where.appendChild(s); };
+    if (r.check) tag("check", "check OCR", `Low OCR confidence (${Math.round(r.ocr_confidence * 100)}%): compare with the original`);
+    if (r.skipped) tag("skip", "kept as-is", "No Arabic or Chinese text in this part");
+    if (r.error) tag("err", "failed", r.error);
+    const src = document.createElement("div"); src.className = "src"; src.dir = "auto"; src.textContent = r.original;
+    const en = document.createElement("div"); en.className = "en"; en.textContent = r.error ? `(${r.error})` : r.english;
+    row.append(where, src, en); $("doc-rows").appendChild(row);
+  }
+
+  $("doc-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(docResults.map(r => r.english).filter(Boolean).join("\n\n")); $("doc-copy").textContent = "Copied"; }
+    catch { $("doc-copy").textContent = "Copy failed"; }
+    setTimeout(() => $("doc-copy").textContent = "Copy English", 1500);
+  };
+  $("doc-dl").onclick = () => download("document_translation.txt", docResults.map(r =>
+    `[${r.where}]\n${r.original}\n---\n${r.error ? "(" + r.error + ")" : r.english}\n`).join("\n"));
+
   $("reset").onclick = async () => {
     try {
       const res = await fetch("/api/reset", { method: "POST" });
@@ -266,7 +398,7 @@
     if (d.audio_s != null) parts.push(`audio ${d.audio_s} s`);
     parts.push(`processed in ${d.elapsed_s} s`);
     $("meta").textContent = parts.join(" · ");
-    $("result").classList.remove("hidden");
+    $("result").classList.remove("hidden"); $("doc-result").classList.add("hidden");
   }
 
   // ---------------------------------------------------------------- copy / download

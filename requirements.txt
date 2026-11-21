@@ -3,6 +3,12 @@ agent-framework-openai   # MAF's OpenAI-compatible client, pointed at local Olla
 python-dotenv
 httpx                    # keep-alive pings to Ollama's native API
 faster-whisper
+pymupdf                  # PDF text layer + rendering scanned pages
+python-docx              # Word documents
+rapidocr                 # OCR (PaddleOCR models on ONNX Runtime)
+onnxruntime
+python-bidi              # RapidOCR's right-to-left (Arabic) support
+pillow
 sounddevice
 soundfile
 numpy
